@@ -1,0 +1,18 @@
+# Binarios de compilación del kernel
+*.o
+*.ko
+*.mod
+*.mod.c
+*.symvers
+*.order
+.*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+
+# Python
+__pycache__/
+*.pyc
+
+# Backups
+*_backup_*
