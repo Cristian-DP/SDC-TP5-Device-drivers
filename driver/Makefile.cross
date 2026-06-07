@@ -1,0 +1,29 @@
+# ============================================================
+# Makefile CROSS-COMPILATION (PC host x86 -> Raspberry Pi ARM)
+# ============================================================
+# Uso:
+#   make                  -> usa las rutas por defecto de abajo
+#   make KDIR=/otra/ruta  -> sobreescribe la ruta del source del kernel
+#
+# Prerequisitos (ver README):
+#   - Toolchain: gcc-arm-linux-gnueabihf
+#   - Source del kernel de la RPi (rama rpi-6.12.y, commit de tu version)
+#   - Module.symvers de la RPi copiado al source
+# ============================================================
+
+obj-m += sdec_cdd.o
+
+# Ruta al source del kernel de la RPi (sobreescribible)
+KDIR ?= $(HOME)/rpi-linux-source
+
+# Arquitectura y cross-compiler
+ARCH ?= arm
+CROSS_COMPILE ?= arm-linux-gnueabihf-
+CC ?= arm-linux-gnueabihf-gcc
+LOCALVERSION ?= +rpt-rpi-v7
+
+all:
+	$(MAKE) -C $(KDIR) M=$(PWD) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) CC=$(CC) LOCALVERSION=$(LOCALVERSION) modules
+
+clean:
+	$(MAKE) -C $(KDIR) M=$(PWD) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) CC=$(CC) LOCALVERSION=$(LOCALVERSION) clean

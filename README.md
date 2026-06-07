@@ -44,32 +44,103 @@ El proyecto consta de dos componentes:
 
 ---
 
-## Requisitos de software (en la Raspberry Pi)
+## Compilación del driver
 
-```bash
-sudo apt update
-sudo apt install -y linux-headers-$(uname -r) build-essential python3-flask
-```
+El enfoque principal de este TP es la **cross-compilation**: se compila el
+módulo en la PC host (x86) apuntando a la arquitectura ARM de la Raspberry, y
+luego se transfiere el binario `.ko` por SSH. Se incluye además una opción de
+compilación nativa como alternativa de respaldo.
 
 ---
 
-## Compilación y carga del driver
+### Opción principal — Cross-compilation (PC host x86 → RPi ARM)
+
+**Prerequisitos en la PC host:**
+
+```bash
+# Toolchain ARM (32-bit, para RPi Zero 2W con kernel v7)
+sudo apt install -y gcc-arm-linux-gnueabihf flex bison libssl-dev bc
+```
+
+**Obtener el source del kernel en la versión EXACTA de la RPi:**
+
+La versión del kernel se obtiene con `uname -r` en la RPi (ej: `6.12.75+rpt-rpi-v7`).
+
+```bash
+git clone https://github.com/raspberrypi/linux.git rpi-linux-source
+cd rpi-linux-source
+git checkout rpi-6.12.y
+# Buscar y hacer checkout del commit de la version exacta:
+git log --oneline | grep "Linux 6.12.75"     # devuelve el hash
+git checkout <hash>
+```
+
+**Configurar el source con los datos de la RPi:**
+
+```bash
+# Copiar .config y Module.symvers desde los headers de la RPi
+# (se obtienen por scp desde /usr/src/linux-headers-<version> de la RPi)
+cp <headers_rpi>/.config .config
+cp <headers_rpi>/Module.symvers Module.symvers
+
+# Dejar CONFIG_LOCALVERSION vacío (el sufijo se inyecta al compilar)
+sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=""/' .config
+
+# Preparar el arbol (compila las herramientas host para x86 y fija la version)
+make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- LOCALVERSION=+rpt-rpi-v7 modules_prepare
+```
+
+**Compilar el módulo:**
 
 ```bash
 cd driver
-make
+make -f Makefile.cross KDIR=$HOME/rpi-linux-source
+```
+
+**Verificar que el vermagic coincide con el kernel de la RPi:**
+
+```bash
+modinfo sdec_cdd.ko | grep vermagic
+# Debe mostrar: 6.12.75+rpt-rpi-v7 ...
+```
+
+**Transferir y cargar en la RPi:**
+
+```bash
+scp sdec_cdd.ko pi@<IP_RPi>:~/
+ssh pi@<IP_RPi>
 sudo insmod sdec_cdd.ko
 sudo chmod 666 /dev/sdec_cdd
 ```
 
-Verificar que cargó correctamente:
+---
+
+### Opción alternativa — Compilación nativa (en la RPi)
+
+Si la cross-compilation falla, se puede compilar directamente en la Raspberry.
+
+**¿Por qué puede fallar la cross-compilation?** Es un proceso sensible a la
+coincidencia exacta de versiones: requiere el source del kernel en el commit
+correcto, el `.config` y `Module.symvers` de la RPi, el toolchain ARM apropiado
+y un `vermagic` que coincida con el kernel en ejecución. Si cualquiera de estos
+elementos no coincide (por ejemplo, una versión de kernel distinta tras un
+`apt upgrade`, o un toolchain de otra versión de gcc), el módulo no compila o
+no carga. La compilación nativa evita esto porque compila siempre contra el
+kernel que está corriendo en ese momento.
+
+**Pasos (en la RPi):**
 
 ```bash
-sudo dmesg | tail
-ls -l /dev/sdec_cdd
+sudo apt install -y linux-headers-$(uname -r) build-essential
+cd driver
+make                      # usa el Makefile nativo
+sudo insmod sdec_cdd.ko
+sudo chmod 666 /dev/sdec_cdd
 ```
 
-Para descargar el módulo:
+---
+
+### Descargar el módulo
 
 ```bash
 sudo rmmod sdec_cdd
@@ -79,18 +150,19 @@ sudo rmmod sdec_cdd
 
 ## Ejecución de la aplicación web
 
-Con el módulo cargado:
+Con el módulo cargado, en la RPi:
 
 ```bash
 cd app
 python3 servidor.py
 ```
 
-El servidor queda escuchando en el puerto 5000. Desde cualquier dispositivo en
-la misma red, abrir en el navegador:
+El servidor escucha en el puerto 5000. Desde un navegador en la misma red:
 http://<IP_DE_LA_RASPBERRY>:5000
 
 Para conocer la IP de la Raspberry: `hostname -I`
+
+Requisito: `sudo apt install -y python3-flask`
 
 ---
 
