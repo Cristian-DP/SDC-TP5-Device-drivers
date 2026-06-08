@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SdeC TP5 - Monitor DHT11</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0B0C10;
+    --panel: #13132A;
+    --fg: #FFFFFF;
+    --muted: #C5C6C7;
+    --accent: #66FCF1;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Courier New', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px;
+  }
+  .header {
+    width: 100%;
+    max-width: 1000px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #1F2833;
+  }
+  .header .tag { color: var(--accent); font-weight: bold; font-size: 14px; }
+  .header .title { font-size: 20px; font-weight: bold; letter-spacing: 2px; }
+  .header .ts { color: var(--muted); font-size: 13px; }
+  .stats {
+    width: 100%;
+    max-width: 1000px;
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .stat {
+    flex: 1;
+    min-width: 140px;
+    background: var(--panel);
+    border: 1px solid #1F2833;
+    border-radius: 10px;
+    padding: 14px 18px;
+  }
+  .stat .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .stat .value { font-size: 28px; font-weight: bold; margin-top: 4px; }
+  .chart-box {
+    width: 100%;
+    max-width: 1000px;
+    background: var(--panel);
+    border: 1px solid #1F2833;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .buttons {
+    width: 100%;
+    max-width: 1000px;
+    display: flex;
+    gap: 16px;
+  }
+  .btn {
+    flex: 1;
+    padding: 16px;
+    border: none;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: #555;
+    background: #1a1a2e;
+  }
+  .btn.active-temp { background: #D32F2F; color: white; box-shadow: 0 0 16px #D32F2F66; }
+  .btn.active-hum  { background: #00C853; color: white; box-shadow: 0 0 16px #00C85366; }
+  .error-badge {
+    display: none;
+    background: #2d0000;
+    border: 1px solid #FF4A4A;
+    color: #FF4A4A;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-left: 12px;
+  }
+  .error-badge.show { display: inline-block; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <span class="tag">SdeC TP5</span>
+      <span class="title">MONITOR DHT11</span>
+      <span id="error-alerta" class="error-badge">SIN CONEXIÓN</span>
+    </div>
+    <span class="ts" id="ts">--:--:--</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="label">Señal</div>
+      <div class="value" id="nombre-senal">--</div>
+    </div>
+    <div class="stat">
+      <div class="label">Actual</div>
+      <div class="value" id="actual">-- </div>
+    </div>
+    <div class="stat">
+      <div class="label">Mínimo</div>
+      <div class="value" id="min">--</div>
+    </div>
+    <div class="stat">
+      <div class="label">Máximo</div>
+      <div class="value" id="max">--</div>
+    </div>
+  </div>
+
+  <div class="chart-box">
+    <canvas id="chart" height="100"></canvas>
+  </div>
+
+  <div class="buttons">
+    <button class="btn" id="btn-temp" onclick="cambiarSenal(0)">TEMPERATURA ( °C )</button>
+    <button class="btn" id="btn-hum" onclick="cambiarSenal(1)">HUMEDAD ( % )</button>
+  </div>
+
+<script>
+const TEMAS = {
+  0: { nombre: "TEMPERATURA", unidad: "°C", linea: "#FF4A4A", fondo: "#FF4A4A22" },
+  1: { nombre: "HUMEDAD",     unidad: "%",  linea: "#00E676", fondo: "#00E67622" },
+};
+
+let senalActual = 0;
+let ignorarContador = 0;
+let tiempos = [];
+let valores = [];
+let vmin = Infinity, vmax = -Infinity;
+let inicio = Date.now();
+const MAX_PUNTOS = 600;
+const VENTANA_INICIAL = 60;    // segundos visibles al arrancar
+const VENTANA_MAXIMA = 300;    // 5 minutos máximo
+
+const ctx = document.getElementById('chart').getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      data: [],
+      borderColor: TEMAS[0].linea,
+      backgroundColor: TEMAS[0].fondo,
+      borderWidth: 2.5,
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+    }]
+  },
+  options: {
+    responsive: true,
+    animation: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: {
+        type: 'linear',
+        title: { display: true, text: 'Tiempo (segundos)', color: '#C5C6C7' },
+        ticks: { color: '#C5C6C7', maxTicksLimit: 12 },
+        grid: { color: '#1F2833' },
+        min: 0,
+        max: 60
+      },
+      y: {
+        title: { display: true, text: 'Valor', color: '#C5C6C7' },
+        ticks: { color: '#C5C6C7', stepSize: 0.5 },
+        grid: { color: '#1F2833' }
+      }
+    }
+  }
+});
+
+function resetear() {
+  tiempos = [];
+  valores = [];
+  vmin = Infinity;
+  vmax = -Infinity;
+  inicio = Date.now();
+  chart.data.labels = [];
+  chart.data.datasets[0].data = [];
+}
+
+function cambiarSenal(n) {
+  fetch(`/senal/${n}`, { method: 'POST' })
+    .then(r => r.json())
+    .then(() => {
+      senalActual = n;
+      ignorarContador = 2;
+      resetear();
+      const t = TEMAS[n];
+      chart.data.datasets[0].borderColor = t.linea;
+      chart.data.datasets[0].backgroundColor = t.fondo;
+      chart.options.scales.y.title.text = `${t.nombre} (${t.unidad})`;
+      document.getElementById('btn-temp').className = n === 0 ? 'btn active-temp' : 'btn';
+      document.getElementById('btn-hum').className  = n === 1 ? 'btn active-hum'  : 'btn';
+    });
+}
+
+function actualizar() {
+  fetch('/dato')
+    .then(r => {
+      // Validamos si el servidor responde con un código de error (ej. 500 o 404)
+      if (!r.ok) throw new Error('Error en el servidor');
+      return r.json();
+    })
+    .then(d => {
+      // ÉXITO: Ocultamos el cartel de error si estaba visible
+      document.getElementById('error-alerta').classList.remove('show');
+
+      const ahora = new Date().toLocaleTimeString('es-AR');
+      document.getElementById('ts').textContent = `RPi ${location.hostname} | ${ahora}`;
+
+      const t = TEMAS[d.senal];
+      const v = d.valor;
+
+      if (ignorarContador > 0) {
+        ignorarContador--;
+        return;
+      }
+
+      const elapsed = Math.floor((Date.now() - inicio) / 1000);
+      tiempos.push(elapsed);
+      valores.push(v);
+      if (tiempos.length > MAX_PUNTOS) { tiempos.shift(); valores.shift(); }
+
+      if (v < vmin) vmin = v;
+      if (v > vmax) vmax = v;
+
+      chart.data.labels = tiempos;
+      chart.data.datasets[0].data = valores;
+      
+      let limiteSup;
+      if (elapsed <= VENTANA_INICIAL) {
+        limiteSup = VENTANA_INICIAL;
+        chart.options.scales.x.min = 0;
+      } else if (elapsed <= VENTANA_MAXIMA) {
+        limiteSup = elapsed + 2;
+        chart.options.scales.x.min = 0;
+      } else {
+        limiteSup = elapsed + 2;
+        chart.options.scales.x.min = elapsed - VENTANA_MAXIMA;
+      }
+      chart.options.scales.x.max = limiteSup;
+      // Eje Y dinámico con rango mínimo de 0.5
+      if (valores.length > 0) {
+        let yMin = Math.min(...valores);
+        let yMax = Math.max(...valores);
+        let rango = yMax - yMin;
+
+        if (rango < 0.5) {
+          // Si los datos son muy planos, forzamos un rango de 0.5 centrado
+          let centro = (yMin + yMax) / 2;
+          yMin = centro - 0.25;
+          yMax = centro + 0.25;
+        } else {
+          // Margen del 15% arriba y abajo para que no toque los bordes
+          let margen = rango * 0.15;
+          yMin -= margen;
+          yMax += margen;
+        }
+
+        chart.options.scales.y.min = yMin;
+        chart.options.scales.y.max = yMax;
+      }
+      chart.update('none');
+
+      document.getElementById('nombre-senal').textContent = t.nombre;
+      document.getElementById('actual').textContent = `${v} ${t.unidad}`;
+      document.getElementById('min').textContent = `${vmin} ${t.unidad}`;
+      document.getElementById('max').textContent = `${vmax} ${t.unidad}`;
+    })
+    .catch(e => {
+      // ERROR: Si el backend se cae o se pierde la red, mostramos el cartel rojo
+      console.error(e);
+      document.getElementById('error-alerta').classList.add('show');
+    });
+}
+
+cambiarSenal(0);
+setInterval(actualizar, 1000);
+</script>
+</body>
+</html>
